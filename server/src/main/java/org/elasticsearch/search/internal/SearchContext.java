@@ -24,6 +24,7 @@ import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.util.Counter;
 import org.elasticsearch.action.search.SearchTask;
+import org.elasticsearch.action.search.ShufflePlan;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.lease.Releasable;
@@ -93,6 +94,20 @@ public abstract class SearchContext extends AbstractRefCounted implements Releas
     public abstract void setTask(SearchTask task);
 
     public abstract SearchTask getTask();
+
+    private ShufflePlan shufflePlan;
+
+    /**
+     * The shuffle plan this shard request is part of (docs/shuffle/PROPOSAL.md), or {@code null}. Set by {@code SearchService}
+     * from the {@code _shuffle_plan} thread-context header when the context is created.
+     */
+    public ShufflePlan shufflePlan() {
+        return shufflePlan;
+    }
+
+    public void shufflePlan(ShufflePlan shufflePlan) {
+        this.shufflePlan = shufflePlan;
+    }
 
     public abstract boolean isCancelled();
 

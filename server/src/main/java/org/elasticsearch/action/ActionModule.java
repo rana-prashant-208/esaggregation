@@ -40,6 +40,8 @@ import org.elasticsearch.action.admin.cluster.node.tasks.get.GetTaskAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.get.TransportGetTaskAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.list.TransportListTasksAction;
+import org.elasticsearch.action.admin.cluster.node.shuffle.ShuffleStatsAction;
+import org.elasticsearch.action.admin.cluster.node.shuffle.TransportShuffleStatsAction;
 import org.elasticsearch.action.admin.cluster.node.usage.NodesUsageAction;
 import org.elasticsearch.action.admin.cluster.node.usage.TransportNodesUsageAction;
 import org.elasticsearch.action.admin.cluster.remote.RemoteInfoAction;
@@ -240,6 +242,7 @@ import org.elasticsearch.rest.action.admin.cluster.RestNodesHotThreadsAction;
 import org.elasticsearch.rest.action.admin.cluster.RestNodesInfoAction;
 import org.elasticsearch.rest.action.admin.cluster.RestNodesStatsAction;
 import org.elasticsearch.rest.action.admin.cluster.RestNodesUsageAction;
+import org.elasticsearch.rest.action.admin.cluster.RestShuffleStatsAction;
 import org.elasticsearch.rest.action.admin.cluster.RestPendingClusterTasksAction;
 import org.elasticsearch.rest.action.admin.cluster.RestPutRepositoryAction;
 import org.elasticsearch.rest.action.admin.cluster.RestPutStoredScriptAction;
@@ -420,6 +423,7 @@ public class ActionModule extends AbstractModule {
         actions.register(RemoteInfoAction.INSTANCE, TransportRemoteInfoAction.class);
         actions.register(NodesStatsAction.INSTANCE, TransportNodesStatsAction.class);
         actions.register(NodesUsageAction.INSTANCE, TransportNodesUsageAction.class);
+        actions.register(ShuffleStatsAction.INSTANCE, TransportShuffleStatsAction.class); // shuffle aggregation (M7)
         actions.register(NodesHotThreadsAction.INSTANCE, TransportNodesHotThreadsAction.class);
         actions.register(ListTasksAction.INSTANCE, TransportListTasksAction.class);
         actions.register(GetTaskAction.INSTANCE, TransportGetTaskAction.class);
@@ -539,6 +543,7 @@ public class ActionModule extends AbstractModule {
         registerHandler.accept(new RestRemoteClusterInfoAction(settings, restController));
         registerHandler.accept(new RestNodesStatsAction(settings, restController));
         registerHandler.accept(new RestNodesUsageAction(settings, restController));
+        registerHandler.accept(new RestShuffleStatsAction(settings, restController)); // shuffle aggregation (M7)
         registerHandler.accept(new RestNodesHotThreadsAction(settings, restController));
         registerHandler.accept(new RestClusterAllocationExplainAction(settings, restController));
         registerHandler.accept(new RestClusterStatsAction(settings, restController));

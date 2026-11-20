@@ -29,7 +29,9 @@ import org.elasticsearch.action.ShardOperationFailedException;
 import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.AliasFilter;
@@ -180,7 +182,36 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
         return failures;
     }
 
+    /** Set before {@link #start()} when this search shuffles a terms aggregation (docs/shuffle/PROPOSAL.md); otherwise null. */
+    private ShuffleCoordinator shuffle;
+
+    final void setShuffle(ShuffleCoordinator shuffle) {
+        this.shuffle = shuffle;
+    }
+
+    final ShuffleCoordinator getShuffle() {
+        return shuffle;
+    }
+
+    @Override
+    final Releasable prepareShardExecution(SearchShardIterator shardIt) {
+        return shuffle == null ? () -> {} : shuffle.withShardHeaders(shardIt.shardId(), true);
+    }
+
+    @Override
+    final boolean isRetryableOnAnotherCopy(Exception e) {
+        return shuffle == null || shuffle.isRetryable(e);
+    }
+
+    @Override
+    public final Releasable withShuffleHeaders(ShardId shardId) {
+        return shuffle == null ? () -> {} : shuffle.withShardHeaders(shardId, false);
+    }
+
     public final void onShardFailure(final int shardIndex, @Nullable SearchShardTarget shardTarget, Exception e) {
+        if (shuffle != null) {
+            shuffle.onShardFailure(e);
+        }
         // we don't aggregate shard failures on non active shards (but do keep the header counts right)
         if (TransportActions.isShardNotAvailableException(e) == false) {
             AtomicArray<ShardSearchFailure> shardFailures = this.shardFailures.get();

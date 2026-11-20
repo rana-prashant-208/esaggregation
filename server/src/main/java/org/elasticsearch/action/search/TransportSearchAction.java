@@ -36,6 +36,7 @@ import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.cluster.routing.ShardIterator;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.Randomness;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.settings.Settings;
@@ -89,7 +90,11 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
         SearchTransportService.registerRequestHandler(transportService, searchService);
         this.clusterService = clusterService;
         this.searchService = searchService;
+        this.shuffleTransportService = transportService;
     }
+
+    /** Used by the shuffle aggregation to talk to reducers (docs/shuffle/PROPOSAL.md). */
+    private final TransportService shuffleTransportService;
 
     private Map<String, AliasFilter> buildPerIndexAliasFilter(SearchRequest request, ClusterState clusterState,
                                                               Index[] concreteIndices, Map<String, AliasFilter> remoteAliasMap) {
@@ -295,6 +300,9 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
                                SearchResponse.Clusters clusters) {
 
         clusterState.blocks().globalBlockedRaiseException(ClusterBlockLevel.READ);
+        // shuffle aggregation (docs/shuffle/PROPOSAL.md): reject invalid requests before any shard is contacted
+        ShuffleRequestValidator.validate(searchRequest, remoteShardIterators.isEmpty() == false, clusterState.nodes(),
+            clusterService.getClusterSettings());
         // TODO: I think startTime() should become part of ActionRequest and that should be used both for index name
         // date math expressions and $now in scripts. This way all apis will deal with now in the same way instead
         // of just for the _search api
@@ -407,22 +415,28 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
                 };
             }, clusters);
         } else {
+            // shuffle (docs/shuffle/PROPOSAL.md section 6.2): plan after can-match, when the executing shards are known
+            final ShuffleCoordinator shuffle = ShuffleCoordinator.create(searchRequest, shardIterators, clusterService.state().nodes(),
+                shuffleTransportService, Randomness.get());
+            // frees the reducers if the search fails at any point
+            final ActionListener<SearchResponse> searchListener = shuffle == null ? listener : shuffle.wrapListener(listener);
             AbstractSearchAsyncAction searchAsyncAction;
             switch (searchRequest.searchType()) {
                 case DFS_QUERY_THEN_FETCH:
                     searchAsyncAction = new SearchDfsQueryThenFetchAsyncAction(logger, searchTransportService, connectionLookup,
-                        aliasFilter, concreteIndexBoosts, indexRoutings, searchPhaseController, executor, searchRequest, listener,
+                        aliasFilter, concreteIndexBoosts, indexRoutings, searchPhaseController, executor, searchRequest, searchListener,
                         shardIterators, timeProvider, clusterStateVersion, task, clusters);
                     break;
                 case QUERY_AND_FETCH:
                 case QUERY_THEN_FETCH:
                     searchAsyncAction = new SearchQueryThenFetchAsyncAction(logger, searchTransportService, connectionLookup,
-                        aliasFilter, concreteIndexBoosts, indexRoutings, searchPhaseController, executor, searchRequest, listener,
+                        aliasFilter, concreteIndexBoosts, indexRoutings, searchPhaseController, executor, searchRequest, searchListener,
                         shardIterators, timeProvider, clusterStateVersion, task, clusters);
                     break;
                 default:
                     throw new IllegalStateException("Unknown search type: [" + searchRequest.searchType() + "]");
             }
+            searchAsyncAction.setShuffle(shuffle);
             return searchAsyncAction;
         }
     }

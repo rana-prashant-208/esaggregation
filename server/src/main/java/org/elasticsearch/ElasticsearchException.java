@@ -1027,7 +1027,11 @@ public class ElasticsearchException extends RuntimeException implements ToXConte
                 org.elasticsearch.common.xcontent.UnknownNamedObjectException::new, 148, Version.V_5_2_0),
         TOO_MANY_BUCKETS_EXCEPTION(MultiBucketConsumerService.TooManyBucketsException.class,
                                    MultiBucketConsumerService.TooManyBucketsException::new, 149,
-            Version.V_6_2_0);
+            Version.V_6_2_0),
+        // shuffle fork (docs/shuffle/PROPOSAL.md): fork-local id far above stock ids so rebases don't collide.
+        // Only ever sent between fork nodes, after the protocol gate.
+        SHUFFLE_REJECTED_EXCEPTION(org.elasticsearch.search.shuffle.ShuffleRejectedException.class,
+            org.elasticsearch.search.shuffle.ShuffleRejectedException::new, 10_000, Version.V_6_5_0);
 
         final Class<? extends ElasticsearchException> exceptionClass;
         final CheckedFunction<StreamInput, ? extends ElasticsearchException, IOException> constructor;

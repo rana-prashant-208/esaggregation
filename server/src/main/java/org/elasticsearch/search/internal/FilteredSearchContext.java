@@ -24,6 +24,7 @@ import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.util.Counter;
 import org.elasticsearch.action.search.SearchTask;
+import org.elasticsearch.action.search.ShufflePlan;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -533,6 +534,16 @@ public abstract class FilteredSearchContext extends SearchContext {
     @Override
     public SearchTask getTask() {
         return in.getTask();
+    }
+
+    @Override
+    public ShufflePlan shufflePlan() {
+        return in.shufflePlan();
+    }
+
+    @Override
+    public void shufflePlan(ShufflePlan shufflePlan) {
+        in.shufflePlan(shufflePlan);
     }
 
     @Override

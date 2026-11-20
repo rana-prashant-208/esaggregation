@@ -28,6 +28,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.SearchTask;
 import org.elasticsearch.action.search.SearchType;
+import org.elasticsearch.action.search.ShufflePlan;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
@@ -91,6 +92,7 @@ import org.elasticsearch.search.query.QuerySearchResult;
 import org.elasticsearch.search.query.ScrollQuerySearchResult;
 import org.elasticsearch.search.rescore.RescorerBuilder;
 import org.elasticsearch.search.searchafter.SearchAfterBuilder;
+import org.elasticsearch.search.shuffle.ShardShuffleSender;
 import org.elasticsearch.search.sort.SortAndFormats;
 import org.elasticsearch.search.sort.SortBuilder;
 import org.elasticsearch.search.suggest.Suggest;
@@ -146,6 +148,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
     private final ThreadPool threadPool;
 
     private final ClusterService clusterService;
+
+    private volatile ShardShuffleSender shardShuffleSender;
 
     private final IndicesService indicesService;
 
@@ -322,7 +326,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
      * Try to load the query results from the cache or execute the query phase directly if the cache cannot be used.
      */
     private void loadOrExecuteQueryPhase(final ShardSearchRequest request, final SearchContext context) throws Exception {
-        final boolean canCache = indicesService.canCache(request, context);
+        // a shuffled result depends on the plan (reducers, attempt), so it must never be served from or put into the cache
+        final boolean canCache = context.shufflePlan() == null && indicesService.canCache(request, context);
         context.getQueryShardContext().freezeContext();
         if (canCache) {
             indicesService.loadIntoContext(request, context, queryPhase);
@@ -335,11 +340,14 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         rewriteShardRequest(request, new ActionListener<ShardSearchRequest>() {
             @Override
             public void onResponse(ShardSearchRequest request) {
+                final SearchPhaseResult result;
                 try {
-                    listener.onResponse(executeQueryPhase(request, task));
+                    result = executeQueryPhase(request, task);
                 } catch (Exception e) {
                     onFailure(e);
+                    return;
                 }
+                maybeShuffle(result, task, listener);
             }
 
             @Override
@@ -347,6 +355,47 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                 listener.onFailure(e);
             }
         });
+    }
+
+    /**
+     * If this shard request is part of a shuffle (docs/shuffle/PROPOSAL.md section 6.4), sends the shuffled aggregation's buckets
+     * to the reducers and replaces it with a placeholder before completing {@code listener}. Otherwise completes it directly.
+     */
+    private <T extends SearchPhaseResult> void maybeShuffle(T result, SearchTask task, ActionListener<? super T> listener) {
+        final ShufflePlan plan;
+        final int attempt;
+        try {
+            plan = ShufflePlan.fromThreadContext(threadPool.getThreadContext());
+            if (plan == null) {
+                listener.onResponse(result);
+                return;
+            }
+            attempt = ShufflePlan.attemptFromThreadContext(threadPool.getThreadContext());
+            if (shardShuffleSender == null) {
+                throw new IllegalStateException("shuffle requested but this node has no shard shuffle sender");
+            }
+        } catch (Exception e) {
+            freeContextOnShuffleFailure(result);
+            listener.onFailure(e);
+            return;
+        }
+        shardShuffleSender.send(plan, attempt, result.getSearchShardTarget().getShardId(), result.queryResult(), task,
+            ActionListener.wrap(v -> listener.onResponse(result), e -> {
+                freeContextOnShuffleFailure(result);
+                listener.onFailure(e);
+            }));
+    }
+
+    /** A failed shuffle fails the shard request, so the coordinator never learns the context id: free it here. */
+    private void freeContextOnShuffleFailure(SearchPhaseResult result) {
+        if (result.getRequestId() >= 0) {
+            freeContext(result.getRequestId());
+        }
+    }
+
+    /** Set once by {@code Node}; {@code null} in tests that build a SearchService without transport. */
+    public void setShardShuffleSender(ShardShuffleSender shardShuffleSender) {
+        this.shardShuffleSender = shardShuffleSender;
     }
 
     private <T> void runAsync(long id, Supplier<T> executable, ActionListener<T> listener) {
@@ -480,7 +529,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
             } finally {
                 cleanContext(context);
             }
-        }, listener);
+            // shuffle: the DFS query phase needs the same hook as the query phase (code-map.md D7)
+        }, ActionListener.wrap(result -> maybeShuffle(result, task, listener), listener::onFailure));
     }
 
     private boolean fetchPhaseShouldFreeContext(SearchContext context) {
@@ -609,6 +659,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
     final SearchContext createContext(ShardSearchRequest request) throws IOException {
         final DefaultSearchContext context = createSearchContext(request, defaultSearchTimeout);
         try {
+            // before parseSource, so the terms factory sees the plan when aggregators are created
+            context.shufflePlan(ShufflePlan.fromThreadContext(threadPool.getThreadContext()));
             if (request.scroll() != null) {
                 context.scrollContext(new ScrollContext());
                 context.scrollContext().scroll = request.scroll();

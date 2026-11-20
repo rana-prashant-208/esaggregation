@@ -93,6 +93,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Valu
 
         PARSER.declareField((b, v) -> b.includeExclude(IncludeExclude.merge(b.includeExclude(), v)),
                 IncludeExclude::parseExclude, IncludeExclude.EXCLUDE_FIELD, ObjectParser.ValueType.STRING_ARRAY);
+
+        PARSER.declareObject(TermsAggregationBuilder::shuffle, (p, c) -> ShuffleConfig.parse(p), ShuffleConfig.SHUFFLE_FIELD);
     }
 
     public static AggregationBuilder parse(String aggregationName, XContentParser parser) throws IOException {
@@ -106,6 +108,11 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Valu
     private TermsAggregator.BucketCountThresholds bucketCountThresholds = new TermsAggregator.BucketCountThresholds(
             DEFAULT_BUCKET_COUNT_THRESHOLDS);
     private boolean showTermDocCountError = false;
+    /**
+     * Shuffle mode (docs/shuffle/PROPOSAL.md). Coordinator-only: intentionally NOT serialized in {@link #innerWriteTo}
+     * so the wire format stays identical to stock Elasticsearch.
+     */
+    private ShuffleConfig shuffle = null;
 
     public TermsAggregationBuilder(String name, ValueType valueType) {
         super(name, ValuesSourceType.ANY, valueType);
@@ -119,6 +126,7 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Valu
         this.collectMode = clone.collectMode;
         this.bucketCountThresholds = new BucketCountThresholds(clone.bucketCountThresholds);
         this.showTermDocCountError = clone.showTermDocCountError;
+        this.shuffle = clone.shuffle;
     }
 
     @Override
@@ -332,6 +340,21 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Valu
         return this;
     }
 
+    /**
+     * Enables shuffle mode. Only honoured on the coordinating node; see {@link ShuffleConfig}.
+     */
+    public TermsAggregationBuilder shuffle(ShuffleConfig shuffle) {
+        this.shuffle = shuffle;
+        return this;
+    }
+
+    /**
+     * The shuffle configuration, or {@code null} if shuffle mode is not requested.
+     */
+    public ShuffleConfig shuffle() {
+        return shuffle;
+    }
+
     @Override
     protected ValuesSourceAggregatorFactory<ValuesSource, ?> innerBuild(SearchContext context, ValuesSourceConfig<ValuesSource> config,
             AggregatorFactory<?> parent, Builder subFactoriesBuilder) throws IOException {
@@ -354,12 +377,15 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Valu
         if (includeExclude != null) {
             includeExclude.toXContent(builder, params);
         }
+        if (shuffle != null) {
+            builder.field(ShuffleConfig.SHUFFLE_FIELD.getPreferredName(), shuffle);
+        }
         return builder;
     }
 
     @Override
     protected int innerHashCode() {
-        return Objects.hash(bucketCountThresholds, collectMode, executionHint, includeExclude, order, showTermDocCountError);
+        return Objects.hash(bucketCountThresholds, collectMode, executionHint, includeExclude, order, showTermDocCountError, shuffle);
     }
 
     @Override
@@ -370,7 +396,8 @@ public class TermsAggregationBuilder extends ValuesSourceAggregationBuilder<Valu
                 && Objects.equals(executionHint, other.executionHint)
                 && Objects.equals(includeExclude, other.includeExclude)
                 && Objects.equals(order, other.order)
-                && Objects.equals(showTermDocCountError, other.showTermDocCountError);
+                && Objects.equals(showTermDocCountError, other.showTermDocCountError)
+                && Objects.equals(shuffle, other.shuffle);
     }
 
     @Override

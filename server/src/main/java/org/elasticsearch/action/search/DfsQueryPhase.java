@@ -19,6 +19,7 @@
 package org.elasticsearch.action.search;
 
 import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchShardTarget;
@@ -75,6 +76,8 @@ final class DfsQueryPhase extends SearchPhase {
             QuerySearchRequest querySearchRequest = new QuerySearchRequest(searchShardTarget.getOriginalIndices(),
                     dfsResult.getRequestId(), dfs);
             final int shardIndex = dfsResult.getShardIndex();
+            // shuffle: the shard must see the plan and the attempt that won the DFS phase (code-map.md D7)
+            try (Releasable ignored = context.withShuffleHeaders(searchShardTarget.getShardId())) {
             searchTransportService.sendExecuteQuery(connection, querySearchRequest, context.getTask(),
                 new SearchActionListener<QuerySearchResult>(searchShardTarget, shardIndex) {
 
@@ -97,6 +100,7 @@ final class DfsQueryPhase extends SearchPhase {
                         }
                     }
                 });
+            }
         }
     }
 }

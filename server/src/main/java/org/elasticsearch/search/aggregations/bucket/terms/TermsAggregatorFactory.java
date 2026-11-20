@@ -20,9 +20,14 @@
 package org.elasticsearch.search.aggregations.bucket.terms;
 
 import org.apache.lucene.search.IndexSearcher;
+import org.elasticsearch.action.search.ShufflePlan;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.index.mapper.DateFieldMapper;
+import org.elasticsearch.index.mapper.KeywordFieldMapper;
+import org.elasticsearch.index.mapper.MappedFieldType;
+import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.AggregationExecutionException;
 import org.elasticsearch.search.aggregations.Aggregator;
@@ -43,8 +48,12 @@ import org.elasticsearch.search.aggregations.support.ValuesSourceConfig;
 import org.elasticsearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory<ValuesSource, TermsAggregatorFactory> {
     private static final DeprecationLogger DEPRECATION_LOGGER = new DeprecationLogger(Loggers.getLogger(TermsAggregatorFactory.class));
@@ -125,6 +134,12 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory<Values
                     context.numberOfShards() == 1));
         }
         bucketCountThresholds.ensureValidity();
+        if (isShuffled()) {
+            // shuffle (docs/shuffle/PROPOSAL.md section 6.5): shards send every bucket; the reducers apply size and min_doc_count
+            validateShuffleField();
+            bucketCountThresholds.setShardSize(Integer.MAX_VALUE);
+            bucketCountThresholds.setShardMinDocCount(0);
+        }
         if (valuesSource instanceof ValuesSource.Bytes) {
             ExecutionMode execution = null;
             if (executionHint != null) {
@@ -190,6 +205,35 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory<Values
         throw new AggregationExecutionException("terms aggregation cannot be applied to field [" + config.fieldContext().field()
                 + "]. It can only be applied to numeric or string fields.");
     }
+
+    /** Whether this is the top-level terms aggregation named by the shard request's shuffle plan. */
+    boolean isShuffled() {
+        ShufflePlan plan = context.shufflePlan();
+        return plan != null && parent == null && plan.aggName().equals(name);
+    }
+
+    /**
+     * The field-type half of the shuffle request validation (code-map.md D2): the coordinator cannot see mappings in 6.5.4.
+     * Only keyword, integral and date fields are allowed, since only their keys have a defined partition function.
+     */
+    private void validateShuffleField() {
+        if (config.script() != null) {
+            throw new IllegalArgumentException("[shuffle] on aggregation [" + name + "] does not support scripts");
+        }
+        MappedFieldType fieldType = config.fieldContext() == null ? null : config.fieldContext().fieldType();
+        boolean allowed = fieldType instanceof KeywordFieldMapper.KeywordFieldType
+            || fieldType instanceof DateFieldMapper.DateFieldType
+            || (fieldType instanceof NumberFieldMapper.NumberFieldType && SHUFFLE_NUMBER_TYPES.contains(fieldType.typeName()));
+        if (allowed == false) {
+            throw new IllegalArgumentException("[shuffle] on aggregation [" + name + "] only supports keyword, long, integer, short, "
+                + "byte and date fields, but field [" + (fieldType == null ? config.fieldContext() : fieldType.name()) + "] is of type ["
+                + (fieldType == null ? "unknown" : fieldType.typeName()) + "]");
+        }
+    }
+
+    private static final Set<String> SHUFFLE_NUMBER_TYPES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+        NumberFieldMapper.NumberType.LONG.typeName(), NumberFieldMapper.NumberType.INTEGER.typeName(),
+        NumberFieldMapper.NumberType.SHORT.typeName(), NumberFieldMapper.NumberType.BYTE.typeName())));
 
     // return the SubAggCollectionMode that this aggregation should use based on the expected size
     // and the cardinality of the field

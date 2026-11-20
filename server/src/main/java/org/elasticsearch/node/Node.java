@@ -141,6 +141,9 @@ import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.fetch.FetchPhase;
+import org.elasticsearch.search.shuffle.ShardShuffleSender;
+import org.elasticsearch.search.shuffle.ShuffleService;
+import org.elasticsearch.search.shuffle.ShuffleSettings;
 import org.elasticsearch.snapshots.SnapshotShardsService;
 import org.elasticsearch.snapshots.SnapshotsService;
 import org.elasticsearch.tasks.Task;
@@ -336,7 +339,8 @@ public abstract class Node implements Closeable {
             }
 
             this.pluginsService = new PluginsService(tmpSettings, environment.configFile(), environment.modulesFile(), environment.pluginsFile(), classpathPlugins);
-            this.settings = pluginsService.updatedSettings();
+            // every fork node advertises the shuffle protocol attribute (docs/shuffle/PROPOSAL.md section 7.1)
+            this.settings = ShuffleSettings.withProtocolAttribute(pluginsService.updatedSettings());
             localNodeFactory = new LocalNodeFactory(settings, nodeEnvironment.nodeId());
 
             // create the environment based on the finalized (processed) view of the settings
@@ -535,6 +539,12 @@ public abstract class Node implements Closeable {
             final SearchService searchService = newSearchService(clusterService, indicesService,
                 threadPool, scriptModule.getScriptService(), bigArrays, searchModule.getFetchPhase(),
                 responseCollectorService);
+            // reducer side of the shuffle terms aggregation (docs/shuffle/PROPOSAL.md section 6.6)
+            final ShuffleService shuffleService = new ShuffleService(settings, settingsModule.getClusterSettings(), threadPool,
+                circuitBreakerService, namedWriteableRegistry, searchService::createReduceContext);
+            shuffleService.registerRequestHandlers(transportService);
+            clusterService.addListener(shuffleService);
+            searchService.setShardShuffleSender(new ShardShuffleSender(transportService, clusterService));
 
             final List<PersistentTasksExecutor<?>> tasksExecutors = pluginsService
                 .filterPlugins(PersistentTaskPlugin.class).stream()
@@ -571,6 +581,7 @@ public abstract class Node implements Closeable {
                     b.bind(AliasValidator.class).toInstance(aliasValidator);
                     b.bind(MetaDataCreateIndexService.class).toInstance(metaDataCreateIndexService);
                     b.bind(SearchService.class).toInstance(searchService);
+                    b.bind(ShuffleService.class).toInstance(shuffleService);
                     b.bind(SearchTransportService.class).toInstance(searchTransportService);
                     b.bind(SearchPhaseController.class).toInstance(new SearchPhaseController(settings,
                         searchService::createReduceContext));
@@ -701,6 +712,7 @@ public abstract class Node implements Closeable {
         injector.getInstance(SnapshotShardsService.class).start();
         injector.getInstance(RoutingService.class).start();
         injector.getInstance(SearchService.class).start();
+        injector.getInstance(ShuffleService.class).start();
         nodeService.getMonitorService().start();
 
         final ClusterService clusterService = injector.getInstance(ClusterService.class);
@@ -886,6 +898,7 @@ public abstract class Node implements Closeable {
         toClose.add(injector.getInstance(GatewayService.class));
         toClose.add(() -> stopWatch.stop().start("search"));
         toClose.add(injector.getInstance(SearchService.class));
+        toClose.add(injector.getInstance(ShuffleService.class));
         toClose.add(() -> stopWatch.stop().start("transport"));
         toClose.add(injector.getInstance(TransportService.class));
 

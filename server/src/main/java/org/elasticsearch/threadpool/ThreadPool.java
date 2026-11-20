@@ -80,6 +80,8 @@ public class ThreadPool extends AbstractComponent implements Scheduler, Closeabl
         public static final String FORCE_MERGE = "force_merge";
         public static final String FETCH_SHARD_STARTED = "fetch_shard_started";
         public static final String FETCH_SHARD_STORE = "fetch_shard_store";
+        /** Reducer side of the shuffle terms aggregation (docs/shuffle/PROPOSAL.md section 6.6). */
+        public static final String SHUFFLE = "shuffle";
     }
 
     public enum ThreadPoolType {
@@ -138,6 +140,7 @@ public class ThreadPool extends AbstractComponent implements Scheduler, Closeabl
         map.put(Names.FETCH_SHARD_STARTED, ThreadPoolType.SCALING);
         map.put(Names.FETCH_SHARD_STORE, ThreadPoolType.SCALING);
         map.put(Names.SEARCH_THROTTLED, ThreadPoolType.FIXED_AUTO_QUEUE_SIZE);
+        map.put(Names.SHUFFLE, ThreadPoolType.FIXED);
         THREAD_POOL_TYPES = Collections.unmodifiableMap(map);
     }
 
@@ -190,6 +193,8 @@ public class ThreadPool extends AbstractComponent implements Scheduler, Closeabl
         builders.put(Names.FETCH_SHARD_STARTED, new ScalingExecutorBuilder(Names.FETCH_SHARD_STARTED, 1, 2 * availableProcessors, TimeValue.timeValueMinutes(5)));
         builders.put(Names.FORCE_MERGE, new FixedExecutorBuilder(settings, Names.FORCE_MERGE, 1, -1));
         builders.put(Names.FETCH_SHARD_STORE, new ScalingExecutorBuilder(Names.FETCH_SHARD_STORE, 1, 2 * availableProcessors, TimeValue.timeValueMinutes(5)));
+        // separate from SEARCH so that shuffle merges cannot starve shard-level search
+        builders.put(Names.SHUFFLE, new FixedExecutorBuilder(settings, Names.SHUFFLE, availableProcessors, 1000));
         for (final ExecutorBuilder<?> builder : customBuilders) {
             if (builders.containsKey(builder.name())) {
                 throw new IllegalArgumentException("builder with name [" + builder.name() + "] already exists");

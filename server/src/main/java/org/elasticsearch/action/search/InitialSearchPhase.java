@@ -25,6 +25,7 @@ import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.search.SearchPhaseResult;
@@ -100,7 +101,18 @@ abstract class InitialSearchPhase<FirstResult extends SearchPhaseResult> extends
             }
             onPhaseDone();
         } else {
-            final ShardRouting nextShard = shardIt.nextOrNull();
+            final ShardRouting nextShard;
+            if (isRetryableOnAnotherCopy(e)) {
+                nextShard = shardIt.nextOrNull();
+            } else {
+                // do not try the remaining copies (shuffle: a reducer rejected the data); account for them as done
+                nextShard = null;
+                final int remaining = shardIt.remaining();
+                if (remaining > 0 && totalOps.addAndGet(remaining) == expectedTotalOps) {
+                    onPhaseDone();
+                    return;
+                }
+            }
             final boolean lastShard = nextShard == null;
             // trace log this exception
             logger.trace(() -> new ParameterizedMessage(
@@ -209,7 +221,7 @@ abstract class InitialSearchPhase<FirstResult extends SearchPhaseResult> extends
         if (shard == null) {
             fork(() -> onShardFailure(shardIndex, null, null, shardIt, new NoShardAvailableActionException(shardIt.shardId())));
         } else {
-            try {
+            try (Releasable ignored = prepareShardExecution(shardIt)) {
                 executePhaseOnShard(shardIt, shard, new SearchActionListener<FirstResult>(new SearchShardTarget(shard.currentNodeId(),
                     shardIt.shardId(), shardIt.getClusterAlias(), shardIt.getOriginalIndices()), shardIndex) {
                     @Override
@@ -286,6 +298,19 @@ abstract class InitialSearchPhase<FirstResult extends SearchPhaseResult> extends
      *
      */
     abstract void onShardSuccess(FirstResult result);
+
+    /**
+     * Called around each synchronous {@link #executePhaseOnShard} call, including retries on another copy; the returned
+     * releasable is closed right after the send. Used by the shuffle aggregation to set per-attempt thread-context headers.
+     */
+    Releasable prepareShardExecution(SearchShardIterator shardIt) {
+        return () -> {};
+    }
+
+    /** Whether a failed shard request may be retried on another copy of the shard. */
+    boolean isRetryableOnAnotherCopy(Exception e) {
+        return true;
+    }
 
     /**
      * Sends the request to the actual shard.

@@ -57,6 +57,11 @@ final class SearchQueryThenFetchAsyncAction extends AbstractSearchAsyncAction<Se
 
     @Override
     protected SearchPhase getNextPhase(final SearchPhaseResults<SearchPhaseResult> results, final SearchPhaseContext context) {
+        if (getShuffle() != null) {
+            // shuffle (docs/shuffle/PROPOSAL.md section 6.8): finalize on the reducers before reducing and fetching
+            return new ShuffleFinalizePhase(context, getShuffle(), results,
+                substituted -> new FetchSearchPhase(substituted, searchPhaseController, context));
+        }
         return new FetchSearchPhase(results, searchPhaseController, context);
     }
 }

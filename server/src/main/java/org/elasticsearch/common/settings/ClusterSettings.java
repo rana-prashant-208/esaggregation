@@ -90,6 +90,7 @@ import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.aggregations.MultiBucketConsumerService;
 import org.elasticsearch.search.fetch.subphase.highlight.FastVectorHighlighter;
+import org.elasticsearch.search.shuffle.ShuffleSettings;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.RemoteClusterAware;
 import org.elasticsearch.transport.RemoteClusterService;
@@ -281,6 +282,10 @@ public final class ClusterSettings extends AbstractScopedSettings {
                     SearchService.DEFAULT_ALLOW_PARTIAL_SEARCH_RESULTS,
                     ElectMasterService.DISCOVERY_ZEN_MINIMUM_MASTER_NODES_SETTING,
                     TransportSearchAction.SHARD_COUNT_LIMIT_SETTING,
+                    ShuffleSettings.SHUFFLE_ENABLED_SETTING,
+                    ShuffleSettings.SHUFFLE_MAX_REDUCERS_SETTING,
+                    ShuffleSettings.SHUFFLE_STATE_TIMEOUT_SETTING,
+                    ShuffleSettings.SHUFFLE_HEAP_ESTIMATE_FACTOR_SETTING,
                     RemoteClusterAware.REMOTE_CLUSTERS_SEEDS,
                     RemoteClusterAware.SEARCH_REMOTE_CLUSTERS_SEEDS,
                     RemoteClusterAware.REMOTE_CLUSTERS_PROXY,

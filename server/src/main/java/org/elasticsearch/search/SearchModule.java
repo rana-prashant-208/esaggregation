@@ -243,6 +243,7 @@ import org.elasticsearch.search.fetch.subphase.highlight.PlainHighlighter;
 import org.elasticsearch.search.fetch.subphase.highlight.UnifiedHighlighter;
 import org.elasticsearch.search.rescore.QueryRescorerBuilder;
 import org.elasticsearch.search.rescore.RescorerBuilder;
+import org.elasticsearch.search.shuffle.InternalShufflePlaceholder;
 import org.elasticsearch.search.sort.FieldSortBuilder;
 import org.elasticsearch.search.sort.GeoDistanceSortBuilder;
 import org.elasticsearch.search.sort.ScoreSortBuilder;
@@ -336,6 +337,9 @@ public class SearchModule {
     }
 
     private void registerAggregations(List<SearchPlugin> plugins) {
+        // result-only: stands in for a shuffled terms aggregation in shard results (docs/shuffle/PROPOSAL.md section 6.7)
+        namedWriteables.add(new NamedWriteableRegistry.Entry(InternalAggregation.class, InternalShufflePlaceholder.NAME,
+            InternalShufflePlaceholder::new));
         registerAggregation(new AggregationSpec(AvgAggregationBuilder.NAME, AvgAggregationBuilder::new, AvgAggregationBuilder::parse)
                 .addResultReader(InternalAvg::new));
         registerAggregation(new AggregationSpec(WeightedAvgAggregationBuilder.NAME, WeightedAvgAggregationBuilder::new,

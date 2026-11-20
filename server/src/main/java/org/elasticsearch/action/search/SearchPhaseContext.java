@@ -22,6 +22,8 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.internal.ShardSearchTransportRequest;
@@ -114,4 +116,11 @@ interface SearchPhaseContext extends ActionListener<SearchResponse>, Executor {
      */
     void executeNextPhase(SearchPhase currentPhase, SearchPhase nextPhase);
 
+    /**
+     * Shuffle aggregation (docs/shuffle/PROPOSAL.md): sets the plan and the shard's current attempt as thread-context headers for
+     * one synchronous send in a phase after the initial one (the DFS query phase). A no-op when the search does not shuffle.
+     */
+    default Releasable withShuffleHeaders(ShardId shardId) {
+        return () -> {};
+    }
 }
