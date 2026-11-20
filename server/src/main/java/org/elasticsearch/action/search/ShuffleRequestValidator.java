@@ -142,18 +142,7 @@ public final class ShuffleRequestValidator {
                 + terms.valueType().getPreferredName() + "]");
         }
 
-        for (AggregationBuilder sub : terms.getSubAggregations()) {
-            if (ALLOWED_METRIC_SUB_AGGS.contains(sub.getType()) == false) {
-                throw fail("[shuffle] on aggregation [" + name + "] only allows metric sub-aggregations " + sorted(ALLOWED_METRIC_SUB_AGGS)
-                    + ", but [" + sub.getName() + "] is of type [" + sub.getType() + "]");
-            }
-        }
-        for (PipelineAggregationBuilder sub : terms.getPipelineAggregations()) {
-            if (ALLOWED_PIPELINE_SUB_AGGS.contains(sub.getType()) == false) {
-                throw fail("[shuffle] on aggregation [" + name + "] only allows pipeline sub-aggregations "
-                    + sorted(ALLOWED_PIPELINE_SUB_AGGS) + ", but [" + sub.getName() + "] is of type [" + sub.getType() + "]");
-            }
-        }
+        validateSubtree(name, terms);
 
         for (PipelineAggregationBuilder sibling : aggs.getPipelineAggregatorFactories()) {
             for (String path : sibling.getBucketsPaths()) {
@@ -164,6 +153,38 @@ public final class ShuffleRequestValidator {
             }
         }
         return terms;
+    }
+
+    /**
+     * Sub-aggregations of a shuffled terms aggregation (code-map.md D36, option A of nested shuffle): metrics, and {@code terms}
+     * at any depth. A reducer owns a top-level key together with its whole subtree, so nested terms are exact as long as the
+     * shards send every nested bucket too, which they do on shuffled requests; a nested {@code shard_size} would therefore
+     * have no effect and is rejected like the top-level one.
+     */
+    private static void validateSubtree(String shuffledName, AggregationBuilder parent) {
+        for (AggregationBuilder sub : parent.getSubAggregations()) {
+            if (sub instanceof TermsAggregationBuilder) {
+                TermsAggregationBuilder nested = (TermsAggregationBuilder) sub;
+                if (nested.shardSize() != -1) {
+                    throw fail("[shard_size] cannot be set on aggregation [" + sub.getName() + "] under [" + shuffledName
+                        + "], which uses [shuffle]: shards always send every bucket");
+                }
+                if (nested.shardMinDocCount() != 0) {
+                    throw fail("[shard_min_doc_count] cannot be set on aggregation [" + sub.getName() + "] under [" + shuffledName
+                        + "], which uses [shuffle]: shards always send every bucket");
+                }
+                validateSubtree(shuffledName, nested);
+            } else if (ALLOWED_METRIC_SUB_AGGS.contains(sub.getType()) == false) {
+                throw fail("[shuffle] on aggregation [" + shuffledName + "] only allows [terms] and metric sub-aggregations "
+                    + sorted(ALLOWED_METRIC_SUB_AGGS) + ", but [" + sub.getName() + "] is of type [" + sub.getType() + "]");
+            }
+        }
+        for (PipelineAggregationBuilder sub : parent.getPipelineAggregations()) {
+            if (ALLOWED_PIPELINE_SUB_AGGS.contains(sub.getType()) == false) {
+                throw fail("[shuffle] on aggregation [" + shuffledName + "] only allows pipeline sub-aggregations "
+                    + sorted(ALLOWED_PIPELINE_SUB_AGGS) + ", but [" + sub.getName() + "] is of type [" + sub.getType() + "]");
+            }
+        }
     }
 
     /**

@@ -204,10 +204,49 @@ public class ShuffleRequestValidatorTests extends ESTestCase {
         assertNotNull(ShuffleRequestValidator.validate(request(shuffled(max)), false, nodes(true), settings(true, max)));
     }
 
-    public void testBucketSubAggregation() {
+    public void testNestedTermsAllowed() {
+        // three levels of terms, metrics and parent pipelines at every level (code-map.md D36)
+        TermsAggregationBuilder l3 = new TermsAggregationBuilder("l3", null).field("c").size(60);
+        l3.subAggregation(new SumAggregationBuilder("bytes").field("bytes"));
+        TermsAggregationBuilder l2 = new TermsAggregationBuilder("l2", null).field("b").size(60);
+        l2.subAggregation(l3);
+        l2.subAggregation(PipelineAggregatorBuilders.bucketSelector("busy", Collections.singletonMap("c", "_count"),
+            new Script("params.c > 1")));
+        TermsAggregationBuilder terms = shuffled(3);
+        terms.subAggregation(l2);
+        assertThat(validate(request(terms)), sameInstance(terms));
+    }
+
+    public void testOtherBucketSubAggregationRejected() {
         TermsAggregationBuilder terms = shuffled(2);
-        terms.subAggregation(new TermsAggregationBuilder("inner", null).field("x"));
-        assertRejected(request(terms), "only allows metric sub-aggregations");
+        terms.subAggregation(new FilterAggregationBuilder("inner", QueryBuilders.matchAllQuery()));
+        assertRejected(request(terms), "only allows [terms] and metric sub-aggregations");
+    }
+
+    public void testRulesApplyAtEveryLevel() {
+        TermsAggregationBuilder deepShardSize = shuffled(2);
+        deepShardSize.subAggregation(new TermsAggregationBuilder("l2", null).field("b")
+            .subAggregation(new TermsAggregationBuilder("l3", null).field("c").shardSize(100)));
+        assertRejected(request(deepShardSize), "[shard_size] cannot be set on aggregation [l3]");
+
+        TermsAggregationBuilder deepMinDocCount = shuffled(2);
+        deepMinDocCount.subAggregation(new TermsAggregationBuilder("l2", null).field("b").shardMinDocCount(2));
+        assertRejected(request(deepMinDocCount), "[shard_min_doc_count] cannot be set on aggregation [l2]");
+
+        TermsAggregationBuilder deepMetric = shuffled(2);
+        deepMetric.subAggregation(new TermsAggregationBuilder("l2", null).field("b").subAggregation(new TopHitsAggregationBuilder("hits")));
+        assertRejected(request(deepMetric), "[top_hits]");
+
+        TermsAggregationBuilder deepPipeline = shuffled(2);
+        TermsAggregationBuilder l2 = new TermsAggregationBuilder("l2", null).field("b");
+        l2.subAggregation(PipelineAggregatorBuilders.bucketSort("sort", Collections.emptyList()));
+        deepPipeline.subAggregation(l2);
+        assertRejected(request(deepPipeline), "only allows pipeline sub-aggregations");
+
+        // a nested terms cannot shuffle on its own: only the top level is partitioned
+        TermsAggregationBuilder nestedShuffle = shuffled(2);
+        nestedShuffle.subAggregation(new TermsAggregationBuilder("l2", null).field("b").shuffle(new ShuffleConfig(2)));
+        assertRejected(request(nestedShuffle), "top-level");
     }
 
     public void testNonAllowedMetricSubAggregation() {

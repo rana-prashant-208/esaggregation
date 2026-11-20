@@ -134,9 +134,13 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory<Values
                     context.numberOfShards() == 1));
         }
         bucketCountThresholds.ensureValidity();
-        if (isShuffled()) {
-            // shuffle (docs/shuffle/PROPOSAL.md section 6.5): shards send every bucket; the reducers apply size and min_doc_count
-            validateShuffleField();
+        final boolean shuffled = isShuffled();
+        if (shuffled || isUnderShuffled()) {
+            // shuffle (docs/shuffle/PROPOSAL.md section 6.5): shards send every bucket, at every level of the shuffled tree
+            // (code-map.md D36); the reducers apply size and min_doc_count. Only the top level's keys are partitioned.
+            if (shuffled) {
+                validateShuffleField();
+            }
             bucketCountThresholds.setShardSize(Integer.MAX_VALUE);
             bucketCountThresholds.setShardMinDocCount(0);
         }
@@ -210,6 +214,18 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory<Values
     boolean isShuffled() {
         ShufflePlan plan = context.shufflePlan();
         return plan != null && parent == null && plan.aggName().equals(name);
+    }
+
+    /** Whether this terms aggregation sits anywhere below the shuffled top-level terms aggregation (nested shuffle, D36). */
+    boolean isUnderShuffled() {
+        if (context.shufflePlan() == null || parent == null) {
+            return false;
+        }
+        AggregatorFactory<?> root = parent;
+        while (root.getParent() != null) {
+            root = root.getParent();
+        }
+        return root instanceof TermsAggregatorFactory && ((TermsAggregatorFactory) root).isShuffled();
     }
 
     /**
